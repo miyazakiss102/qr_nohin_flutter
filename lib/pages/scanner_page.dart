@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:vibration/vibration.dart';
 import '../models/confirmed_qr_item.dart';
 import '../models/overlay_box_data.dart';
 import '../models/settings_result.dart';
+import '../services/nohin_export_service.dart';
 import '../widgets/overlay_layer.dart';
 import 'settings_page.dart';
 
@@ -23,6 +25,8 @@ class _ScannerPageState extends State<ScannerPage> {
   final MobileScannerController controller = MobileScannerController();
   final ScrollController listScrollController = ScrollController();
 
+  static const int stableDetectFrameThreshold = 3;
+
   bool autoConfirmMode = false;
   bool duplicateVibrationEnabled = true;
   bool overlayEnabled = true;
@@ -32,13 +36,24 @@ class _ScannerPageState extends State<ScannerPage> {
   final Map<String, DateTime> recentConfirmedAtMap = {};
   final Map<String, OverlayBoxData> overlayMap = {};
   final Map<String, Timer> duplicateHighlightTimers = {};
+  final Map<String, int> visibleStreakCountMap = {};
 
   List<String> currentVisibleCodes = [];
   int nextConfirmedSequence = 1;
   DateTime? lastDuplicateNoticeAt;
   Timer? overlayClearTimer;
 
+  String lastInvalidValue = '';
+  DateTime? lastInvalidToastAt;
+  File? lastSavedFile;
+  DateTime? firstConfirmTime;
+
   int get confirmedCount => confirmedItems.length;
+
+  String normalizeQr(String raw) {
+    return raw.trim().toUpperCase();
+  }
+
   void highlightDuplicateItem(String code) {
     final index = confirmedItems.indexWhere((item) => item.code == code);
     if (index == -1) {
@@ -54,9 +69,7 @@ class _ScannerPageState extends State<ScannerPage> {
     });
 
     duplicateHighlightTimers[code] = Timer(const Duration(seconds: 10), () {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       final resetIndex = confirmedItems.indexWhere((item) => item.code == code);
       if (resetIndex == -1) {
@@ -87,6 +100,21 @@ class _ScannerPageState extends State<ScannerPage> {
       toastLength: Toast.LENGTH_SHORT,
       gravity: ToastGravity.BOTTOM,
     );
+  }
+
+  Future<void> showNotNohinToastRateLimited(String value) async {
+    final now = DateTime.now();
+
+    if (value == lastInvalidValue &&
+        lastInvalidToastAt != null &&
+        now.difference(lastInvalidToastAt!).inMilliseconds < 1200) {
+      return;
+    }
+
+    lastInvalidValue = value;
+    lastInvalidToastAt = now;
+
+    await showToastMessage('納品データではありません');
   }
 
   Future<void> notifyDuplicateIfNeeded(String code) async {
@@ -145,9 +173,37 @@ class _ScannerPageState extends State<ScannerPage> {
     });
   }
 
+  bool isStableCode(String code) {
+    return (visibleStreakCountMap[code] ?? 0) >= stableDetectFrameThreshold;
+  }
+
+  void updateStableDetection(Set<String> detectedValidCodesThisFrame) {
+    final existingKeys = visibleStreakCountMap.keys.toList();
+
+    for (final code in existingKeys) {
+      if (!detectedValidCodesThisFrame.contains(code)) {
+        visibleStreakCountMap.remove(code);
+      }
+    }
+
+    for (final code in detectedValidCodesThisFrame) {
+      final oldCount = visibleStreakCountMap[code] ?? 0;
+      visibleStreakCountMap[code] = oldCount + 1;
+    }
+  }
+
   void confirmCode(String code) {
-    final trimmed = code.trim();
+    firstConfirmTime ??= DateTime.now();
+    final trimmed = normalizeQr(code);
     if (trimmed.isEmpty) {
+      return;
+    }
+
+    if (!NohinExportService.isNohinFormat(trimmed)) {
+      return;
+    }
+
+    if (!isStableCode(trimmed)) {
       return;
     }
 
@@ -161,14 +217,13 @@ class _ScannerPageState extends State<ScannerPage> {
       ConfirmedQrItem(
         confirmedNo: nextConfirmedSequence,
         code: trimmed,
-        isDuplicateHighlighted: true, // ←最初は赤
+        isDuplicateHighlighted: true,
       ),
     );
 
     recentConfirmedAtMap[trimmed] = DateTime.now();
     nextConfirmedSequence++;
 
-    // 10秒後に緑へ戻す
     highlightDuplicateItem(trimmed);
   }
 
@@ -181,11 +236,21 @@ class _ScannerPageState extends State<ScannerPage> {
 
     setState(() {
       for (final code in currentVisibleCodes) {
-        if (confirmedCodeSet.contains(code)) {
+        final normalized = normalizeQr(code);
+
+        if (!NohinExportService.isNohinFormat(normalized)) {
           continue;
         }
 
-        confirmCode(code);
+        if (!isStableCode(normalized)) {
+          continue;
+        }
+
+        if (confirmedCodeSet.contains(normalized)) {
+          continue;
+        }
+
+        confirmCode(normalized);
         changed = true;
       }
 
@@ -212,7 +277,63 @@ class _ScannerPageState extends State<ScannerPage> {
     }
   }
 
+  Future<void> saveTxt() async {
+    if (confirmedItems.isEmpty) {
+      await showToastMessage('出力対象がありません');
+      return;
+    }
+
+    final now = firstConfirmTime ?? DateTime.now();
+    final buffer = StringBuffer();
+
+    for (final item in confirmedItems) {
+      final code12 = item.code.substring(0, 12);
+      buffer.writeln(code12);
+    }
+
+    try {
+      final file = await NohinExportService.saveTxt(
+        content: buffer.toString(),
+        baseDate: now,
+      );
+
+      setState(() {
+        lastSavedFile = file;
+      });
+
+      await showToastMessage('保存完了');
+
+      // ここで共有シートを開く
+      await NohinExportService.shareFile(file);
+    } catch (e) {
+      await showToastMessage('保存失敗');
+    }
+  }
+
+  Future<void> shareLastTxt() async {
+    final file = lastSavedFile;
+
+    if (file == null) {
+      await showToastMessage('先に出力してください');
+      return;
+    }
+
+    final exists = await file.exists();
+    if (!exists) {
+      await showToastMessage('共有対象ファイルが見つかりません');
+      return;
+    }
+
+    try {
+      await NohinExportService.shareFile(file);
+    } catch (e) {
+      await showToastMessage('共有失敗');
+      debugPrint('TXT share error: $e');
+    }
+  }
+
   void clearAll() {
+    firstConfirmTime = null;
     for (final timer in duplicateHighlightTimers.values) {
       timer.cancel();
     }
@@ -223,9 +344,13 @@ class _ScannerPageState extends State<ScannerPage> {
       confirmedCodeSet.clear();
       recentConfirmedAtMap.clear();
       overlayMap.clear();
+      visibleStreakCountMap.clear();
       currentVisibleCodes = [];
       nextConfirmedSequence = 1;
       lastDuplicateNoticeAt = null;
+      lastInvalidValue = '';
+      lastInvalidToastAt = null;
+      lastSavedFile = null;
     });
   }
 
@@ -280,6 +405,35 @@ class _ScannerPageState extends State<ScannerPage> {
       capture.size.height.toDouble(),
     );
 
+    final Set<String> detectedValidCodesThisFrame = {};
+    final Set<String> invalidNoticeShownSet = {};
+
+    for (final barcode in capture.barcodes) {
+      final rawValue = barcode.rawValue?.trim();
+      if (rawValue == null || rawValue.isEmpty) {
+        continue;
+      }
+
+      final normalized = normalizeQr(rawValue);
+      if (normalized.isEmpty) {
+        continue;
+      }
+
+      final isValidNohin = NohinExportService.isNohinFormat(normalized);
+
+      if (!isValidNohin) {
+        if (!invalidNoticeShownSet.contains(normalized)) {
+          invalidNoticeShownSet.add(normalized);
+          showNotNohinToastRateLimited(normalized);
+        }
+        continue;
+      }
+
+      detectedValidCodesThisFrame.add(normalized);
+    }
+
+    updateStableDetection(detectedValidCodesThisFrame);
+
     final Map<String, OverlayBoxData> newOverlayMap = {};
     final List<String> newVisibleCodes = [];
     final List<String> codesToAutoConfirm = [];
@@ -290,8 +444,22 @@ class _ScannerPageState extends State<ScannerPage> {
         continue;
       }
 
-      if (!newVisibleCodes.contains(rawValue)) {
-        newVisibleCodes.add(rawValue);
+      final normalized = normalizeQr(rawValue);
+      if (normalized.isEmpty) {
+        continue;
+      }
+
+      final isValidNohin = NohinExportService.isNohinFormat(normalized);
+      if (!isValidNohin) {
+        continue;
+      }
+
+      if (!isStableCode(normalized)) {
+        continue;
+      }
+
+      if (!newVisibleCodes.contains(normalized)) {
+        newVisibleCodes.add(normalized);
       }
 
       final rect = buildRectFromBarcode(
@@ -304,22 +472,22 @@ class _ScannerPageState extends State<ScannerPage> {
         continue;
       }
 
-      final confirmedItem = findConfirmedItemByCode(rawValue);
+      final confirmedItem = findConfirmedItemByCode(normalized);
       final isConfirmed = confirmedItem != null;
 
-      newOverlayMap[rawValue] = OverlayBoxData(
+      newOverlayMap[normalized] = OverlayBoxData(
         rect: rect,
-        code: rawValue,
+        code: normalized,
         isConfirmed: isConfirmed,
         confirmedNo: confirmedItem?.confirmedNo,
       );
 
       if (autoConfirmMode && !isConfirmed) {
-        codesToAutoConfirm.add(rawValue);
+        codesToAutoConfirm.add(normalized);
       }
 
       if (isConfirmed) {
-        notifyDuplicateIfNeeded(rawValue);
+        notifyDuplicateIfNeeded(normalized);
       }
     }
 
@@ -616,18 +784,14 @@ class _ScannerPageState extends State<ScannerPage> {
                                       child: SizedBox(
                                         height: double.infinity,
                                         child: ElevatedButton(
-                                          onPressed: () {
-                                            showToastMessage(
-                                              '確認画面は次フェーズ以降で実装します',
-                                            );
-                                          },
+                                          onPressed: shareLastTxt,
                                           style: ElevatedButton.styleFrom(
                                             backgroundColor:
-                                                Colors.grey.shade300,
+                                                Colors.blueGrey.shade300,
                                             foregroundColor: Colors.black,
                                           ),
                                           child: const Text(
-                                            '確認',
+                                            '共有',
                                             style: TextStyle(fontSize: 15),
                                           ),
                                         ),
@@ -638,11 +802,7 @@ class _ScannerPageState extends State<ScannerPage> {
                                       width: 101,
                                       height: double.infinity,
                                       child: ElevatedButton(
-                                        onPressed: () {
-                                          showToastMessage(
-                                            'TXT出力は次フェーズ以降で実装します',
-                                          );
-                                        },
+                                        onPressed: saveTxt,
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: Colors.grey.shade300,
                                           foregroundColor: Colors.black,
@@ -704,7 +864,7 @@ class TopConfirmedOverlay extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         const int crossAxisCount = 10;
-        const double horizontalPadding = 8 * 2; // 左右padding合計
+        const double horizontalPadding = 16;
         const double crossAxisSpacing = 4;
         const double mainAxisSpacing = 4;
 
@@ -734,7 +894,7 @@ class TopConfirmedOverlay extends StatelessWidget {
             ),
             itemBuilder: (context, index) {
               final item = confirmedItems[index];
-              final bool isRed = item.isDuplicateHighlighted;
+              final isRed = item.isDuplicateHighlighted;
 
               return Container(
                 alignment: Alignment.center,

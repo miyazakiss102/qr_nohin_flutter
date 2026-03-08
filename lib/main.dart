@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import 'pages/scanner_page.dart';
 
 void main() {
@@ -17,7 +18,7 @@ class QrNohinApp extends StatelessWidget {
         useMaterial3: false,
         scaffoldBackgroundColor: Colors.white,
       ),
-      home: const ScannerPage(),
+      home: ScannerPage(),
     );
   }
 }
