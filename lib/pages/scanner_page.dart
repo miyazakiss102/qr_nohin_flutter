@@ -701,49 +701,66 @@ class TopConfirmedOverlay extends StatelessWidget {
       return const SizedBox();
     }
 
-    final int rowCount = (confirmedItems.length / 10).ceil();
-    final double overlayHeight = rowCount * 30.0 + ((rowCount - 1) * 4.0);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const int crossAxisCount = 10;
+        const double horizontalPadding = 8 * 2; // 左右padding合計
+        const double crossAxisSpacing = 4;
+        const double mainAxisSpacing = 4;
 
-    return SizedBox(
-      width: double.infinity,
-      height: overlayHeight,
-      child: GridView.builder(
-        physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-        itemCount: confirmedItems.length,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 10,
-          crossAxisSpacing: 4,
-          mainAxisSpacing: 4,
-          childAspectRatio: 1.0,
-        ),
-        itemBuilder: (context, index) {
-          final item = confirmedItems[index];
-          final bool isRed = item.isDuplicateHighlighted;
+        final int rowCount = (confirmedItems.length / crossAxisCount).ceil();
 
-          return Container(
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isRed
-                  ? Colors.red.withOpacity(0.45)
-                  : Colors.green.withOpacity(0.35),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.65),
-                width: 1,
-              ),
+        final double availableWidth = constraints.maxWidth - horizontalPadding;
+        final double totalSpacing = (crossAxisCount - 1) * crossAxisSpacing;
+
+        final double itemSize =
+            (availableWidth - totalSpacing) / crossAxisCount;
+
+        final double overlayHeight =
+            (itemSize * rowCount) + (mainAxisSpacing * (rowCount - 1));
+
+        return SizedBox(
+          width: double.infinity,
+          height: overlayHeight,
+          child: GridView.builder(
+            physics: const NeverScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            itemCount: confirmedItems.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: crossAxisSpacing,
+              mainAxisSpacing: mainAxisSpacing,
+              childAspectRatio: 1.0,
             ),
-            child: Text(
-              '${item.confirmedNo}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          );
-        },
-      ),
+            itemBuilder: (context, index) {
+              final item = confirmedItems[index];
+              final bool isRed = item.isDuplicateHighlighted;
+
+              return Container(
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: isRed
+                      ? Colors.red.withOpacity(0.45)
+                      : Colors.green.withOpacity(0.35),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.65),
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  '${item.confirmedNo}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }
