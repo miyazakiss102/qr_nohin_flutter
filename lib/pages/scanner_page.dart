@@ -702,22 +702,17 @@ class TopConfirmedOverlay extends StatelessWidget {
     }
 
     final int rowCount = (confirmedItems.length / 10).ceil();
-    final double overlayHeight = rowCount * 32.0 + 12;
+    final double overlayHeight = rowCount * 30.0 + ((rowCount - 1) * 4.0);
 
-    return Container(
+    return SizedBox(
       width: double.infinity,
       height: overlayHeight,
-      margin: const EdgeInsets.all(8),
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.28),
-        borderRadius: BorderRadius.circular(8),
-      ),
       child: GridView.builder(
         physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
         itemCount: confirmedItems.length,
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 10, // 1行10個固定
+          crossAxisCount: 10,
           crossAxisSpacing: 4,
           mainAxisSpacing: 4,
           childAspectRatio: 1.0,
@@ -730,10 +725,13 @@ class TopConfirmedOverlay extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: isRed
-                  ? Colors.red.withOpacity(0.92)
-                  : Colors.green.withOpacity(0.90),
+                  ? Colors.red.withOpacity(0.45)
+                  : Colors.green.withOpacity(0.35),
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: Colors.white, width: 1),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.65),
+                width: 1,
+              ),
             ),
             child: Text(
               '${item.confirmedNo}',
