@@ -701,23 +701,32 @@ class TopConfirmedOverlay extends StatelessWidget {
       return const SizedBox();
     }
 
+    final int rowCount = (confirmedItems.length / 10).ceil();
+    final double overlayHeight = rowCount * 32.0 + 12;
+
     return Container(
       width: double.infinity,
+      height: overlayHeight,
       margin: const EdgeInsets.all(8),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.28),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Wrap(
-        spacing: 4,
-        runSpacing: 4,
-        children: confirmedItems.map((item) {
+      child: GridView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: confirmedItems.length,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 10, // 1行10個固定
+          crossAxisSpacing: 4,
+          mainAxisSpacing: 4,
+          childAspectRatio: 1.0,
+        ),
+        itemBuilder: (context, index) {
+          final item = confirmedItems[index];
           final bool isRed = item.isDuplicateHighlighted;
 
           return Container(
-            width: 28,
-            height: 28,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: isRed
@@ -735,7 +744,7 @@ class TopConfirmedOverlay extends StatelessWidget {
               ),
             ),
           );
-        }).toList(),
+        },
       ),
     );
   }
