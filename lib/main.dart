@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:vibration/vibration.dart';
 
 void main() {
   runApp(const QrNohinApp());
@@ -31,25 +33,98 @@ class ScannerPage extends StatefulWidget {
 
 class _ScannerPageState extends State<ScannerPage> {
   final MobileScannerController controller = MobileScannerController();
+  final ScrollController listScrollController = ScrollController();
 
-  int confirmedCount = 0;
   bool autoConfirmMode = false;
+  bool duplicateVibrationEnabled = true;
 
   final List<QrItem> qrItems = [];
+  final Set<String> scannedCodeSet = {};
 
-  void addQrCode(String code) {
-    final exists = qrItems.any((item) => item.code == code);
-    if (exists) {
+  int nextSequence = 1;
+  DateTime? lastDuplicateNoticeAt;
+
+  int get confirmedCount {
+    return qrItems.where((item) => item.isConfirmed).length;
+  }
+
+  int get totalCount {
+    return qrItems.length;
+  }
+
+  Future<void> showToastMessage(String message) async {
+    await Fluttertoast.cancel();
+    await Fluttertoast.showToast(
+      msg: message,
+      toastLength: Toast.LENGTH_SHORT,
+      gravity: ToastGravity.BOTTOM,
+    );
+  }
+
+  Future<void> notifyDuplicateIfNeeded() async {
+    final now = DateTime.now();
+
+    if (lastDuplicateNoticeAt != null &&
+        now.difference(lastDuplicateNoticeAt!) <
+            const Duration(seconds: 2)) {
+      return;
+    }
+
+    lastDuplicateNoticeAt = now;
+
+    if (duplicateVibrationEnabled) {
+      final bool? canVibrate = await Vibration.hasVibrator();
+      if (canVibrate ?? false) {
+        await Vibration.vibrate(duration: 80);
+      }
+    }
+
+    await showToastMessage('読み込み済みです');
+  }
+
+  void scrollListToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!listScrollController.hasClients) {
+        return;
+      }
+
+      listScrollController.animateTo(
+        listScrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  void addQrCode(String rawCode) {
+    final String code = rawCode.trim();
+
+    if (code.isEmpty) {
+      return;
+    }
+
+    if (scannedCodeSet.contains(code)) {
+      notifyDuplicateIfNeeded();
       return;
     }
 
     setState(() {
-      qrItems.insert(0, QrItem(code: code, isConfirmed: false));
+      scannedCodeSet.add(code);
 
-      if (qrItems.length > 20) {
-        qrItems.removeLast();
-      }
+      qrItems.add(
+        QrItem(
+          sequenceNo: nextSequence,
+          code: code,
+          isConfirmed: autoConfirmMode,
+        ),
+      );
+
+      nextSequence++;
+
+      
     });
+
+    scrollListToBottom();
   }
 
   void confirmAll() {
@@ -57,14 +132,14 @@ class _ScannerPageState extends State<ScannerPage> {
       for (final item in qrItems) {
         item.isConfirmed = true;
       }
-      confirmedCount = qrItems.where((e) => e.isConfirmed).length;
     });
   }
 
   void clearAll() {
     setState(() {
       qrItems.clear();
-      confirmedCount = 0;
+      scannedCodeSet.clear();
+      nextSequence = 1;
     });
   }
 
@@ -77,37 +152,39 @@ class _ScannerPageState extends State<ScannerPage> {
   void onDetect(BarcodeCapture capture) {
     final List<Barcode> barcodes = capture.barcodes;
 
-    bool changed = false;
-
     for (final barcode in barcodes) {
       final String? rawValue = barcode.rawValue;
-
       if (rawValue == null || rawValue.isEmpty) {
         continue;
       }
 
-      final exists = qrItems.any((item) => item.code == rawValue);
-      if (exists) {
-        continue;
-      }
+      addQrCode(rawValue);
+    }
+  }
 
-      qrItems.insert(0, QrItem(code: rawValue, isConfirmed: false));
+  Future<void> openSettings() async {
+    final bool? result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SettingsPage(
+          duplicateVibrationEnabled: duplicateVibrationEnabled,
+        ),
+      ),
+    );
 
-      if (qrItems.length > 20) {
-        qrItems.removeLast();
-      }
-
-      changed = true;
+    if (result == null) {
+      return;
     }
 
-    if (changed) {
-      setState(() {});
-    }
+    setState(() {
+      duplicateVibrationEnabled = result;
+    });
   }
 
   @override
   void dispose() {
     controller.dispose();
+    listScrollController.dispose();
     super.dispose();
   }
 
@@ -118,10 +195,8 @@ class _ScannerPageState extends State<ScannerPage> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final double screenWidth = constraints.maxWidth;
-            final double screenHeight = constraints.maxHeight;
-
-            final double previewHeight = screenHeight * 0.50;
-            final double bottomButtonsHeight = screenHeight * 0.18;
+            final double previewHeight = screenWidth * 1.0;
+            const double bottomAreaHeight = 92;
             final double confirmWidth = screenWidth * 0.33;
 
             return Column(
@@ -144,13 +219,7 @@ class _ScannerPageState extends State<ScannerPage> {
                           width: 82,
                           height: 40,
                           child: ElevatedButton(
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('設定画面は次フェーズで実装します'),
-                                ),
-                              );
-                            },
+                            onPressed: openSettings,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.grey.shade200,
                               foregroundColor: Colors.black,
@@ -167,16 +236,25 @@ class _ScannerPageState extends State<ScannerPage> {
                     ],
                   ),
                 ),
-
                 Padding(
                   padding: const EdgeInsets.only(left: 8, right: 8, top: 4),
                   child: Row(
                     children: [
                       Text(
-                        '確定件数: $confirmedCount',
+                        '件数: $totalCount',
                         style: const TextStyle(
-                          fontSize: 30,
+                          fontSize: 24,
                           color: Colors.black87,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        '確定: $confirmedCount',
+                        style: const TextStyle(
+                          fontSize: 24,
+                          color: Colors.black87,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                       const Spacer(),
@@ -190,28 +268,32 @@ class _ScannerPageState extends State<ScannerPage> {
                     ],
                   ),
                 ),
-
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(8),
                     child: qrItems.isEmpty
-                        ? const SizedBox()
-                        : GridView.builder(
-                            itemCount: qrItems.length,
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2,
-                              childAspectRatio: 4.8,
-                              crossAxisSpacing: 8,
-                              mainAxisSpacing: 8,
+                        ? const Center(
+                            child: Text(
+                              'QRデータはまだありません',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.black54,
+                              ),
                             ),
+                          )
+                        : ListView.builder(
+                            controller: listScrollController,
+                            itemCount: qrItems.length,
                             itemBuilder: (context, index) {
                               final item = qrItems[index];
 
                               return Container(
+                                margin: const EdgeInsets.only(bottom: 6),
                                 alignment: Alignment.centerLeft,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 10,
+                                ),
                                 decoration: BoxDecoration(
                                   color: item.isConfirmed
                                       ? Colors.red.shade100
@@ -224,156 +306,157 @@ class _ScannerPageState extends State<ScannerPage> {
                                     width: 1.2,
                                   ),
                                 ),
-                                child: Text(
-                                  item.code,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
-                                  ),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 40,
+                                      child: Text(
+                                        '${item.sequenceNo}',
+                                        textAlign: TextAlign.right,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    const Text(
+                                      '.',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        item.code,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               );
                             },
                           ),
                   ),
                 ),
-
                 SizedBox(
-                  height: bottomButtonsHeight + 52,
+                  height: bottomAreaHeight + 22,
                   child: Padding(
-                    padding: const EdgeInsets.only(bottom: 0),
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         SizedBox(
                           width: confirmWidth,
+                          child: ElevatedButton(
+                            onPressed: confirmAll,
+                            onLongPress: toggleAutoConfirm,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green.shade700,
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.zero,
+                            ),
+                            child: const Text(
+                              '確定\n（長押し:自動）',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 16),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
                           child: Column(
-                            mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Padding(
-                                padding:
-                                    const EdgeInsets.only(left: 8, right: 8),
-                                child: SizedBox(
-                                  width: double.infinity,
-                                  height: 42,
-                                  child: OutlinedButton(
-                                    onPressed: () {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('出力履歴は次フェーズ以降で実装します'),
-                                        ),
-                                      );
-                                    },
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.black,
-                                      backgroundColor: Colors.white,
-                                    ),
-                                    child: const Text(
-                                      '出力履歴',
-                                      style: TextStyle(fontSize: 16),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 6),
                               SizedBox(
                                 width: double.infinity,
-                                height: bottomButtonsHeight,
-                                child: ElevatedButton(
-                                  onPressed: confirmAll,
-                                  onLongPress: toggleAutoConfirm,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green.shade700,
-                                    foregroundColor: Colors.white,
+                                height: 28,
+                                child: OutlinedButton(
+                                  onPressed: () {
+                                    showToastMessage('出力履歴は次フェーズで実装します');
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.black,
+                                    backgroundColor: Colors.white,
                                     padding: EdgeInsets.zero,
                                   ),
                                   child: const Text(
-                                    '確定\n（長押し:自動）',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(fontSize: 22),
+                                    '出力履歴',
+                                    style: TextStyle(fontSize: 14),
                                   ),
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(
-                              left: 8,
-                              right: 8,
-                              bottom: 0,
-                            ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 63,
-                                    child: ElevatedButton(
-                                      onPressed: () {
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(
-                                          const SnackBar(
-                                            content: Text('確認画面は次フェーズ以降で実装します'),
+                              const SizedBox(height: 4),
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: SizedBox(
+                                        height: double.infinity,
+                                        child: ElevatedButton(
+                                          onPressed: () {
+                                            showToastMessage('確認画面は次フェーズ以降で実装します');
+                                          },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor:
+                                                Colors.grey.shade300,
+                                            foregroundColor: Colors.black,
                                           ),
-                                        );
-                                      },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.grey.shade300,
-                                        foregroundColor: Colors.black,
-                                      ),
-                                      child: const Text(
-                                        '確認',
-                                        style: TextStyle(fontSize: 18),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                SizedBox(
-                                  width: 101,
-                                  height: 62,
-                                  child: ElevatedButton(
-                                    onPressed: () {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text('TXT出力は次フェーズ以降で実装します'),
+                                          child: const Text(
+                                            '確認',
+                                            style: TextStyle(fontSize: 15),
+                                          ),
                                         ),
-                                      );
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.grey.shade300,
-                                      foregroundColor: Colors.black,
+                                      ),
                                     ),
-                                    child: const Text(
-                                      '出力',
-                                      style: TextStyle(fontSize: 18),
+                                    const SizedBox(width: 8),
+                                    SizedBox(
+                                      width: 101,
+                                      height: double.infinity,
+                                      child: ElevatedButton(
+                                        onPressed: () {
+                                          showToastMessage('TXT出力は次フェーズ以降で実装します');
+                                        },
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              Colors.grey.shade300,
+                                          foregroundColor: Colors.black,
+                                        ),
+                                        child: const Text(
+                                          '出力',
+                                          style: TextStyle(fontSize: 15),
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                                    const SizedBox(width: 8),
+                                    SizedBox(
+                                      width: 71,
+                                      height: double.infinity,
+                                      child: ElevatedButton(
+                                        onPressed: clearAll,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              Colors.orange.shade300,
+                                          foregroundColor: Colors.black,
+                                          padding: EdgeInsets.zero,
+                                        ),
+                                        child: const Text(
+                                          'クリア',
+                                          style: TextStyle(fontSize: 14),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 8),
-                                SizedBox(
-                                  width: 71,
-                                  height: 59,
-                                  child: ElevatedButton(
-                                    onPressed: clearAll,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.orange.shade300,
-                                      foregroundColor: Colors.black,
-                                      padding: EdgeInsets.zero,
-                                    ),
-                                    child: const Text(
-                                      'クリア',
-                                      style: TextStyle(fontSize: 16),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -389,11 +472,70 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 }
 
+class SettingsPage extends StatefulWidget {
+  final bool duplicateVibrationEnabled;
+
+  const SettingsPage({
+    super.key,
+    required this.duplicateVibrationEnabled,
+  });
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  late bool tempDuplicateVibrationEnabled;
+
+  @override
+  void initState() {
+    super.initState();
+    tempDuplicateVibrationEnabled = widget.duplicateVibrationEnabled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('設定'),
+      ),
+      body: ListView(
+        children: [
+          SwitchListTile(
+            title: const Text('重複読取時の振動通知'),
+            subtitle: const Text('同じQRを読み込んだときに振動させる'),
+            value: tempDuplicateVibrationEnabled,
+            onChanged: (value) {
+              setState(() {
+                tempDuplicateVibrationEnabled = value;
+              });
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SizedBox(
+              height: 48,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context, tempDuplicateVibrationEnabled);
+                },
+                child: const Text('保存して戻る'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class QrItem {
+  final int sequenceNo;
   final String code;
   bool isConfirmed;
 
   QrItem({
+    required this.sequenceNo,
     required this.code,
     required this.isConfirmed,
   });
