@@ -46,6 +46,8 @@ class _ScannerPageState extends State<ScannerPage> {
   String lastInvalidValue = '';
   DateTime? lastInvalidToastAt;
   File? lastSavedFile;
+
+  // 最初のQR確定時刻
   DateTime? firstConfirmTime;
 
   int get confirmedCount => confirmedItems.length;
@@ -193,7 +195,6 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   void confirmCode(String code) {
-    firstConfirmTime ??= DateTime.now();
     final trimmed = normalizeQr(code);
     if (trimmed.isEmpty) {
       return;
@@ -210,6 +211,9 @@ class _ScannerPageState extends State<ScannerPage> {
     if (confirmedCodeSet.contains(trimmed)) {
       return;
     }
+
+    // 最初の確定時刻を一度だけ保存
+    firstConfirmTime ??= DateTime.now();
 
     confirmedCodeSet.add(trimmed);
 
@@ -283,7 +287,7 @@ class _ScannerPageState extends State<ScannerPage> {
       return;
     }
 
-    final now = firstConfirmTime ?? DateTime.now();
+    final baseDate = firstConfirmTime ?? DateTime.now();
     final buffer = StringBuffer();
 
     for (final item in confirmedItems) {
@@ -294,7 +298,7 @@ class _ScannerPageState extends State<ScannerPage> {
     try {
       final file = await NohinExportService.saveTxt(
         content: buffer.toString(),
-        baseDate: now,
+        baseDate: baseDate,
       );
 
       setState(() {
@@ -302,11 +306,10 @@ class _ScannerPageState extends State<ScannerPage> {
       });
 
       await showToastMessage('保存完了');
-
-      // ここで共有シートを開く
       await NohinExportService.shareFile(file);
     } catch (e) {
       await showToastMessage('保存失敗');
+      debugPrint('TXT save/share error: $e');
     }
   }
 
@@ -333,7 +336,6 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   void clearAll() {
-    firstConfirmTime = null;
     for (final timer in duplicateHighlightTimers.values) {
       timer.cancel();
     }
@@ -351,6 +353,7 @@ class _ScannerPageState extends State<ScannerPage> {
       lastInvalidValue = '';
       lastInvalidToastAt = null;
       lastSavedFile = null;
+      firstConfirmTime = null;
     });
   }
 
@@ -647,9 +650,10 @@ class _ScannerPageState extends State<ScannerPage> {
                       const Spacer(),
                       Text(
                         '自動確定: ${autoConfirmMode ? "ON" : "OFF"}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 18,
-                          color: Colors.black87,
+                          fontWeight: FontWeight.bold,
+                          color: autoConfirmMode ? Colors.red : Colors.black87,
                         ),
                       ),
                     ],
