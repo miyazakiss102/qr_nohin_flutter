@@ -31,6 +31,7 @@ class _ScannerPageState extends State<ScannerPage> {
   final Set<String> confirmedCodeSet = {};
   final Map<String, DateTime> recentConfirmedAtMap = {};
   final Map<String, OverlayBoxData> overlayMap = {};
+  final Map<String, Timer> duplicateHighlightTimers = {};
 
   List<String> currentVisibleCodes = [];
   int nextConfirmedSequence = 1;
@@ -38,6 +39,37 @@ class _ScannerPageState extends State<ScannerPage> {
   Timer? overlayClearTimer;
 
   int get confirmedCount => confirmedItems.length;
+  void highlightDuplicateItem(String code) {
+    final index = confirmedItems.indexWhere((item) => item.code == code);
+    if (index == -1) {
+      return;
+    }
+
+    duplicateHighlightTimers[code]?.cancel();
+
+    setState(() {
+      confirmedItems[index] = confirmedItems[index].copyWith(
+        isDuplicateHighlighted: true,
+      );
+    });
+
+    duplicateHighlightTimers[code] = Timer(const Duration(seconds: 10), () {
+      if (!mounted) {
+        return;
+      }
+
+      final resetIndex = confirmedItems.indexWhere((item) => item.code == code);
+      if (resetIndex == -1) {
+        return;
+      }
+
+      setState(() {
+        confirmedItems[resetIndex] = confirmedItems[resetIndex].copyWith(
+          isDuplicateHighlighted: false,
+        );
+      });
+    });
+  }
 
   ConfirmedQrItem? findConfirmedItemByCode(String code) {
     for (final item in confirmedItems) {
@@ -65,6 +97,8 @@ class _ScannerPageState extends State<ScannerPage> {
         now.difference(recentConfirmedAt) < const Duration(seconds: 2)) {
       return;
     }
+
+    highlightDuplicateItem(code);
 
     if (lastDuplicateNoticeAt != null &&
         now.difference(lastDuplicateNoticeAt!) < const Duration(seconds: 2)) {
@@ -124,11 +158,18 @@ class _ScannerPageState extends State<ScannerPage> {
     confirmedCodeSet.add(trimmed);
 
     confirmedItems.add(
-      ConfirmedQrItem(confirmedNo: nextConfirmedSequence, code: trimmed),
+      ConfirmedQrItem(
+        confirmedNo: nextConfirmedSequence,
+        code: trimmed,
+        isDuplicateHighlighted: true, // ←最初は赤
+      ),
     );
 
     recentConfirmedAtMap[trimmed] = DateTime.now();
     nextConfirmedSequence++;
+
+    // 10秒後に緑へ戻す
+    highlightDuplicateItem(trimmed);
   }
 
   void confirmCurrentVisibleCodes() {
@@ -172,6 +213,11 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   void clearAll() {
+    for (final timer in duplicateHighlightTimers.values) {
+      timer.cancel();
+    }
+    duplicateHighlightTimers.clear();
+
     setState(() {
       confirmedItems.clear();
       confirmedCodeSet.clear();
@@ -339,6 +385,12 @@ class _ScannerPageState extends State<ScannerPage> {
   @override
   void dispose() {
     overlayClearTimer?.cancel();
+
+    for (final timer in duplicateHighlightTimers.values) {
+      timer.cancel();
+    }
+    duplicateHighlightTimers.clear();
+
     controller.dispose();
     listScrollController.dispose();
     super.dispose();
@@ -367,6 +419,17 @@ class _ScannerPageState extends State<ScannerPage> {
                         child: MobileScanner(
                           controller: controller,
                           onDetect: (capture) => onDetect(capture, previewSize),
+                        ),
+                      ),
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        child: SafeArea(
+                          bottom: false,
+                          child: TopConfirmedOverlay(
+                            confirmedItems: confirmedItems,
+                          ),
                         ),
                       ),
                       if (overlayEnabled)
@@ -622,6 +685,57 @@ class _ScannerPageState extends State<ScannerPage> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class TopConfirmedOverlay extends StatelessWidget {
+  final List<ConfirmedQrItem> confirmedItems;
+
+  const TopConfirmedOverlay({super.key, required this.confirmedItems});
+
+  @override
+  Widget build(BuildContext context) {
+    if (confirmedItems.isEmpty) {
+      return const SizedBox();
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.all(8),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.28),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        children: confirmedItems.map((item) {
+          final bool isRed = item.isDuplicateHighlighted;
+
+          return Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isRed
+                  ? Colors.red.withOpacity(0.92)
+                  : Colors.green.withOpacity(0.90),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.white, width: 1),
+            ),
+            child: Text(
+              '${item.confirmedNo}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
