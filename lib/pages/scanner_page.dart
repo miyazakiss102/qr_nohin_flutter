@@ -10,9 +10,12 @@ import 'package:vibration/vibration.dart';
 import '../models/confirmed_qr_item.dart';
 import '../models/overlay_box_data.dart';
 import '../models/settings_result.dart';
+import '../models/history_entry.dart';
+import '../services/history_service.dart';
 import '../services/nohin_export_service.dart';
 import '../widgets/overlay_layer.dart';
 import 'settings_page.dart';
+import 'history_page.dart';
 
 class ScannerPage extends StatefulWidget {
   const ScannerPage({super.key});
@@ -138,7 +141,7 @@ class _ScannerPageState extends State<ScannerPage> {
     lastDuplicateNoticeAt = now;
 
     if (duplicateVibrationEnabled) {
-      final bool? canVibrate = await Vibration.hasVibrator();
+      final bool canVibrate = await Vibration.hasVibrator();
       if (canVibrate ?? false) {
         await Vibration.vibrate(duration: 80);
       }
@@ -291,14 +294,35 @@ class _ScannerPageState extends State<ScannerPage> {
     final buffer = StringBuffer();
 
     for (final item in confirmedItems) {
-      final code12 = item.code.substring(0, 12);
-      buffer.writeln(code12);
+      buffer.writeln(item.code);
     }
 
     try {
       final file = await NohinExportService.saveTxt(
         content: buffer.toString(),
         baseDate: baseDate,
+      );
+
+      final exportId = file.path;
+
+      final historyEntries = confirmedItems.map((item) {
+        final code12 = item.code.length >= 12
+            ? item.code.substring(0, 12)
+            : item.code;
+
+        return HistoryEntry(
+          exportId: exportId,
+          exportedAt: baseDate,
+          confirmedNo: item.confirmedNo,
+          fullCode: item.code,
+          code12: code12,
+        );
+      }).toList();
+
+      await HistoryService.appendExport(
+        exportId: exportId,
+        exportedAt: baseDate,
+        newEntries: historyEntries,
       );
 
       setState(() {
@@ -530,6 +554,13 @@ class _ScannerPageState extends State<ScannerPage> {
     });
 
     clearOverlaySoon();
+  }
+
+  Future<void> openHistory() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const HistoryPage()),
+    );
   }
 
   Future<void> openSettings() async {
@@ -766,9 +797,7 @@ class _ScannerPageState extends State<ScannerPage> {
                                 width: double.infinity,
                                 height: 28,
                                 child: OutlinedButton(
-                                  onPressed: () {
-                                    showToastMessage('出力履歴は次フェーズ以降で実装します');
-                                  },
+                                  onPressed: openHistory,
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: Colors.black,
                                     backgroundColor: Colors.white,
