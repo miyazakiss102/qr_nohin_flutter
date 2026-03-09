@@ -483,10 +483,80 @@ class _HistoryPageState extends State<HistoryPage> {
     return '$y/$m/$d $hh:$mm:$ss';
   }
 
+  Map<String, Map<String, int>> buildDuplicateDateMapAll(
+    List<HistoryFileItem> items,
+  ) {
+    final Map<String, Map<String, int>> result = {};
+
+    for (final item in items) {
+      for (final record in item.records) {
+        result.putIfAbsent(record.fullCode, () => {});
+        result[record.fullCode]!.update(
+          item.exportDateKey,
+          (value) => value + 1,
+          ifAbsent: () => 1,
+        );
+      }
+    }
+
+    return result;
+  }
+
+  Future<void> showDuplicateDatesDialog({
+    required String fullCode,
+    required Map<String, int> dateCountMap,
+  }) async {
+    final sortedKeys = dateCountMap.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('重複日一覧'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  fullCode,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ...sortedKeys.map((dateKey) {
+                  final count = dateCountMap[dateKey] ?? 0;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '$dateKey（$count件）',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('閉じる'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredItems = buildFilteredItems();
     final duplicateMapAll = buildDuplicateCountMapAll(filteredItems);
+    final duplicateDateMapAll = buildDuplicateDateMapAll(filteredItems);
     final latestMapAll = buildLatestRecordMapAll(filteredItems);
     final displayItems = buildDisplayItems(filteredItems, latestMapAll);
 
@@ -621,12 +691,26 @@ class _HistoryPageState extends State<HistoryPage> {
                         margin: const EdgeInsets.fromLTRB(8, 6, 8, 6),
                         child: ExpansionTile(
                           initiallyExpanded: true,
-                          title: Text(
-                            '$dateKey (${items.length}件)',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
+                          title: Row(
+                            children: [
+                              Text(
+                                dateKey,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+
+                              const Spacer(),
+
+                              Text(
+                                '${items.fold<int>(0, (sum, e) => sum + e.records.length)}',
+                                style: const TextStyle(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
                           children: items.map((item) {
                             return Container(
@@ -692,11 +776,6 @@ class _HistoryPageState extends State<HistoryPage> {
                                       6,
                                     ),
                                     child: Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 10,
-                                      ),
                                       decoration: BoxDecoration(
                                         color: Colors.grey.shade50,
                                         borderRadius: BorderRadius.circular(8),
@@ -704,32 +783,57 @@ class _HistoryPageState extends State<HistoryPage> {
                                           color: Colors.black12,
                                         ),
                                       ),
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.center,
-                                        children: [
-                                          if (showDuplicateLabel) ...[
-                                            Text(
-                                              '重複$duplicateOtherCount件',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.red.shade700,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                          ],
-                                          Expanded(
-                                            child: SelectableText(
-                                              record.fullCode,
-                                              maxLines: 1,
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                height: 1.2,
-                                              ),
-                                            ),
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(8),
+                                        onTap: showDuplicateLabel
+                                            ? () async {
+                                                final dateCountMap =
+                                                    duplicateDateMapAll[record
+                                                        .fullCode];
+                                                if (dateCountMap == null ||
+                                                    dateCountMap.isEmpty) {
+                                                  return;
+                                                }
+
+                                                await showDuplicateDatesDialog(
+                                                  fullCode: record.fullCode,
+                                                  dateCountMap: dateCountMap,
+                                                );
+                                              }
+                                            : null,
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 10,
                                           ),
-                                        ],
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.center,
+                                            children: [
+                                              if (showDuplicateLabel) ...[
+                                                Text(
+                                                  '重複$duplicateOtherCount件',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.red.shade700,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                              ],
+                                              Expanded(
+                                                child: SelectableText(
+                                                  record.fullCode,
+                                                  maxLines: 1,
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    height: 1.2,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   );
